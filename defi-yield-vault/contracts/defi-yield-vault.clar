@@ -17,6 +17,11 @@
 (define-map user-deposits principal uint)
 (define-map user-last-claim principal uint)
 
+;; Helper function to get minimum of two values
+(define-private (min-value (a uint) (b uint))
+  (if (<= a b) a b)
+)
+
 ;; Read-only functions
 (define-read-only (get-user-deposit (user principal))
   (default-to u0 (map-get? user-deposits user))
@@ -80,12 +85,13 @@
       (asserts! (>= total-available amount) ERR_INSUFFICIENT_BALANCE)
       
       (let (
-        (new-deposit (- current-deposit (min amount current-deposit)))
+        (withdraw-from-deposit (min-value amount current-deposit))
+        (new-deposit (- current-deposit withdraw-from-deposit))
       )
         (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
         (map-set user-deposits tx-sender new-deposit)
         (map-set user-last-claim tx-sender block-height)
-        (var-set total-deposits (- (var-get total-deposits) (min amount current-deposit)))
+        (var-set total-deposits (- (var-get total-deposits) withdraw-from-deposit))
         (ok amount)
       )
     )
@@ -127,5 +133,14 @@
     (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
     (var-set vault-paused false)
     (ok true)
+  )
+)
+
+;; Emergency withdrawal function for contract owner
+(define-public (emergency-withdraw (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (try! (as-contract (stx-transfer? amount tx-sender CONTRACT_OWNER)))
+    (ok amount)
   )
 )
