@@ -42,8 +42,8 @@
 (define-read-only (calculate-yield (user principal))
   (let (
     (deposit (get-user-deposit user))
-    (last-claim (default-to block-height (map-get? user-last-claim user)))
-    (blocks-elapsed (- block-height last-claim))
+    (last-claim (default-to stacks-block-height (map-get? user-last-claim user)))
+    (blocks-elapsed (- stacks-block-height last-claim))
   )
     (if (> deposit u0)
       (/ (* deposit (var-get yield-rate) blocks-elapsed) u1000000)
@@ -53,7 +53,7 @@
 )
 
 ;; Public functions
-(define-public (deposit (amount uint))
+(define-public (deposit-stx (amount uint))
   (begin
     (asserts! (not (var-get vault-paused)) ERR_VAULT_PAUSED)
     (asserts! (> amount u0) ERR_INVALID_AMOUNT)
@@ -65,7 +65,7 @@
       (new-deposit (+ current-deposit amount))
     )
       (map-set user-deposits tx-sender new-deposit)
-      (map-set user-last-claim tx-sender block-height)
+      (map-set user-last-claim tx-sender stacks-block-height)
       (var-set total-deposits (+ (var-get total-deposits) amount))
       (ok new-deposit)
     )
@@ -90,7 +90,7 @@
       )
         (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
         (map-set user-deposits tx-sender new-deposit)
-        (map-set user-last-claim tx-sender block-height)
+        (map-set user-last-claim tx-sender stacks-block-height)
         (var-set total-deposits (- (var-get total-deposits) withdraw-from-deposit))
         (ok amount)
       )
@@ -106,7 +106,7 @@
     (asserts! (not (var-get vault-paused)) ERR_VAULT_PAUSED)
     
     (try! (as-contract (stx-transfer? yield-earned tx-sender tx-sender)))
-    (map-set user-last-claim tx-sender block-height)
+    (map-set user-last-claim tx-sender stacks-block-height)
     (ok yield-earned)
   )
 )
@@ -142,5 +142,74 @@
     (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
     (try! (as-contract (stx-transfer? amount tx-sender CONTRACT_OWNER)))
     (ok amount)
+  )
+)
+
+;; Get user's total balance (deposit + yield)
+(define-public (get-user-balance (user principal))
+  (let (
+    (current-deposit (get-user-deposit user))
+    (yield-earned (calculate-yield user))
+  )
+    (ok (+ current-deposit yield-earned))
+  )
+)
+
+;; Compound yield - add earned yield to principal
+(define-public (compound-yield)
+  (let (
+    (yield-earned (calculate-yield tx-sender))
+    (current-deposit (get-user-deposit tx-sender))
+  )
+    (asserts! (> yield-earned u0) ERR_INSUFFICIENT_BALANCE)
+    (asserts! (not (var-get vault-paused)) ERR_VAULT_PAUSED)
+    
+    (let (
+      (new-deposit (+ current-deposit yield-earned))
+    )
+      (map-set user-deposits tx-sender new-deposit)
+      (map-set user-last-claim tx-sender stacks-block-height)
+      (var-set total-deposits (+ (var-get total-deposits) yield-earned))
+      (ok new-deposit)
+    )
+  )
+)
+
+;; Partial withdrawal - withdraw specific amount from deposit only
+(define-public (partial-withdraw (amount uint))
+  (begin
+    (asserts! (not (var-get vault-paused)) ERR_VAULT_PAUSED)
+    (asserts! (> amount u0) ERR_INVALID_AMOUNT)
+    
+    (let (
+      (current-deposit (get-user-deposit tx-sender))
+    )
+      (asserts! (>= current-deposit amount) ERR_INSUFFICIENT_BALANCE)
+      
+      (let (
+        (new-deposit (- current-deposit amount))
+      )
+        (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
+        (map-set user-deposits tx-sender new-deposit)
+        (var-set total-deposits (- (var-get total-deposits) amount))
+        (ok amount)
+      )
+    )
+  )
+)
+
+;; Get vault statistics
+(define-public (get-vault-stats)
+  (let (
+    (total-stx (get-total-deposits))
+    (current-yield-rate (get-yield-rate))
+    (vault-status (is-vault-paused))
+  )
+    (ok {
+      total-deposits: total-stx,
+      yield-rate: current-yield-rate,
+      is-paused: vault-status,
+      contract-balance: (stx-get-balance (as-contract tx-sender))
+    })
   )
 )
